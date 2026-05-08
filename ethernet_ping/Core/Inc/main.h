@@ -31,7 +31,9 @@ extern "C" {
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "enc28j60.h"
+#include "enc_netif.h"
+#include "http_server.h"
 /* USER CODE END Includes */
 
 /* Exported types ------------------------------------------------------------*/
