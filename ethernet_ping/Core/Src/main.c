@@ -22,6 +22,11 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "string.h"
+#include "lwip/init.h"
+#include "lwip/netif.h"
+#include "lwip/timeouts.h"
+#include "netif/etharp.h"
+#include "lwip/tcp.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -59,8 +64,8 @@ uint8_t enc_revision = 0;
 static uint8_t mac_addr[6] = {0x02, 0x00, 0x00, 0x11, 0x22, 0x33};
 static uint8_t ip_addr[4] = {192, 168, 1, 100};
 uint16_t button_count;
-
-
+struct netif enc_netif;
+uint8_t pkt_buf[400];
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -502,72 +507,144 @@ void TCP_Send(uint8_t *dst_mac, uint8_t *dst_ip,
 
     ENC28J60_SendPacket(pkt, 14 + ip_len);
 }
-
-void ENC28J60_HandleTCP(uint8_t *pkt, uint16_t len)
+//
+//void ENC28J60_HandleTCP(uint8_t *pkt, uint16_t len)
+//{
+//    // Sadece port 80
+//    uint16_t dst_port = (pkt[36] << 8) | pkt[37];
+//    if (dst_port != 80) return;
+//
+//    uint8_t  flags   = pkt[47];
+//    uint32_t seq_in  = ((uint32_t)pkt[38] << 24) | ((uint32_t)pkt[39] << 16)
+//                     | ((uint32_t)pkt[40] << 8)  | pkt[41];
+//    uint32_t ack_in  = ((uint32_t)pkt[42] << 24) | ((uint32_t)pkt[43] << 16)
+//                     | ((uint32_t)pkt[44] << 8)  | pkt[45];
+//
+//    uint8_t *src_mac = &pkt[6];
+//    uint8_t *src_ip  = &pkt[26];
+//    uint16_t src_port = (pkt[34] << 8) | pkt[35];
+//
+//    uint8_t tcp_offset = (pkt[46] >> 4) * 4;
+//    uint16_t payload_len = len - 14 - 20 - tcp_offset;
+//
+//    // SYN geldi → SYN+ACK gönder
+//    if ((flags & 0x02) && !(flags & 0x10))
+//    {
+//        TCP_Send(src_mac, src_ip, 80, src_port,
+//                 0x12345678,      // bizim seq
+//                 seq_in + 1,      // ack = karşının seq + 1
+//                 0x12,            // SYN + ACK
+//                 NULL, 0);
+//        return;
+//    }
+//
+//    // ACK veya PSH+ACK → GET isteği mi?
+//    if ((flags & 0x10) && payload_len > 0)
+//    {
+//        uint8_t *payload = &pkt[14 + 20 + tcp_offset];
+//
+//        // GET isteği mi?
+//        if (payload[0] == 'G' && payload[1] == 'E' && payload[2] == 'T')
+//        {
+//            // Buton sayacını oku
+//            char html[256];
+//            snprintf(html, sizeof(html),
+//                "HTTP/1.0 200 OK\r\n"
+//                "Content-Type: text/html\r\n"
+//                "\r\n"
+//                "<html><body>"
+//                "<h1>Buton Sayaci: %lu</h1>"
+//                "<meta http-equiv='refresh' content='1'>"
+//                "</body></html>",
+//                button_count);
+//
+//            uint32_t my_seq = 0x12345679;
+//            uint32_t my_ack = seq_in + payload_len;
+//
+//            // PSH+ACK ile veri gönder
+//            TCP_Send(src_mac, src_ip, 80, src_port,
+//                     my_seq, my_ack, 0x18,
+//                     (uint8_t*)html, strlen(html));
+//
+//            // FIN+ACK
+//            TCP_Send(src_mac, src_ip, 80, src_port,
+//                     my_seq + strlen(html), my_ack, 0x11,
+//                     NULL, 0);
+//        }
+//    }
+//}
+err_t enc28j60_low_level_output(struct netif *netif, struct pbuf *p)
 {
-    // Sadece port 80
-    uint16_t dst_port = (pkt[36] << 8) | pkt[37];
-    if (dst_port != 80) return;
+    struct pbuf *q;
+    uint16_t len = 0;
+    uint8_t tx_buf[600];
 
-    uint8_t  flags   = pkt[47];
-    uint32_t seq_in  = ((uint32_t)pkt[38] << 24) | ((uint32_t)pkt[39] << 16)
-                     | ((uint32_t)pkt[40] << 8)  | pkt[41];
-    uint32_t ack_in  = ((uint32_t)pkt[42] << 24) | ((uint32_t)pkt[43] << 16)
-                     | ((uint32_t)pkt[44] << 8)  | pkt[45];
-
-    uint8_t *src_mac = &pkt[6];
-    uint8_t *src_ip  = &pkt[26];
-    uint16_t src_port = (pkt[34] << 8) | pkt[35];
-
-    uint8_t tcp_offset = (pkt[46] >> 4) * 4;
-    uint16_t payload_len = len - 14 - 20 - tcp_offset;
-
-    // SYN geldi → SYN+ACK gönder
-    if ((flags & 0x02) && !(flags & 0x10))
+    // pbuf zincirini düzleştir
+    for (q = p; q != NULL; q = q->next)
     {
-        TCP_Send(src_mac, src_ip, 80, src_port,
-                 0x12345678,      // bizim seq
-                 seq_in + 1,      // ack = karşının seq + 1
-                 0x12,            // SYN + ACK
-                 NULL, 0);
-        return;
+        memcpy(&tx_buf[len], q->payload, q->len);
+        len += q->len;
     }
 
-    // ACK veya PSH+ACK → GET isteği mi?
-    if ((flags & 0x10) && payload_len > 0)
-    {
-        uint8_t *payload = &pkt[14 + 20 + tcp_offset];
-
-        // GET isteği mi?
-        if (payload[0] == 'G' && payload[1] == 'E' && payload[2] == 'T')
-        {
-            // Buton sayacını oku
-            char html[256];
-            snprintf(html, sizeof(html),
-                "HTTP/1.0 200 OK\r\n"
-                "Content-Type: text/html\r\n"
-                "\r\n"
-                "<html><body>"
-                "<h1>Buton Sayaci: %lu</h1>"
-                "<meta http-equiv='refresh' content='1'>"
-                "</body></html>",
-                button_count);
-
-            uint32_t my_seq = 0x12345679;
-            uint32_t my_ack = seq_in + payload_len;
-
-            // PSH+ACK ile veri gönder
-            TCP_Send(src_mac, src_ip, 80, src_port,
-                     my_seq, my_ack, 0x18,
-                     (uint8_t*)html, strlen(html));
-
-            // FIN+ACK
-            TCP_Send(src_mac, src_ip, 80, src_port,
-                     my_seq + strlen(html), my_ack, 0x11,
-                     NULL, 0);
-        }
-    }
+    ENC28J60_SendPacket(tx_buf, len);
+    return ERR_OK;
 }
+
+// netif init
+err_t enc28j60_netif_init(struct netif *netif)
+{
+    netif->hwaddr_len = 6;
+    memcpy(netif->hwaddr, mac_addr, 6);
+    netif->mtu = 500; // RAM kısıtlı, küçük tuttuk
+    netif->flags = NETIF_FLAG_BROADCAST |
+                   NETIF_FLAG_ETHARP |
+                   NETIF_FLAG_LINK_UP;
+    netif->output     = etharp_output;
+    netif->linkoutput = enc28j60_low_level_output;
+    return ERR_OK;
+}
+
+err_t http_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_t err)  //buraya girmiyor buffer arttırılmalı
+{
+    if (p == NULL)
+    {
+        tcp_close(pcb);
+        return ERR_OK;
+    }
+
+    // GET isteği mi?
+    if (strncmp((char*)p->payload, "GET", 3) == 0)
+    {
+        char html[200];
+        snprintf(html, sizeof(html),
+            "HTTP/1.0 200 OK\r\n"
+            "Content-Type: text/html\r\n"
+            "\r\n"
+            "<html><body>"
+            "<h1>Buton: %d</h1>"
+            "<meta http-equiv='refresh' content='1'>"
+            "</body></html>",
+            button_count);
+
+        tcp_write(pcb, html, strlen(html), TCP_WRITE_FLAG_COPY);
+        tcp_output(pcb);
+        tcp_close(pcb);
+    }
+
+    pbuf_free(p);
+    return ERR_OK;
+}
+
+err_t http_accept(void *arg, struct tcp_pcb *newpcb, err_t err)
+{
+	   if (err != ERR_OK || newpcb == NULL)
+	        return ERR_VAL;
+
+	    tcp_recv(newpcb, http_recv);
+	    tcp_nagle_disable(newpcb); // küçük paketleri bekletme
+	    return ERR_OK;
+}
+
 
 /* USER CODE END 0 */
 
@@ -602,28 +679,29 @@ int main(void)
   MX_GPIO_Init();
   MX_SPI1_Init();
   /* USER CODE BEGIN 2 */
-  ENC28J60_Init();
-  uint8_t test_pkt[42] = {
-      // DST: broadcast
-      0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
-      // SRC: bizim MAC
-      0x02,0x00,0x00,0x11,0x22,0x33,
-      // EtherType: ARP
-      0x08,0x06,
-      // ARP
-      0x00,0x01, // HW type
-      0x08,0x00, // Protocol
-      0x06,0x04, // lengths
-      0x00,0x01, // opcode request
-      0x02,0x00,0x00,0x11,0x22,0x33, // sender MAC
-      192,168,1,100,                  // sender IP
-      0x00,0x00,0x00,0x00,0x00,0x00, // target MAC
-      192,168,1,50                    // target IP
-  };
 
-  uint8_t pkt_buf[600];
-  uint8_t tx = 0xAA;
-  uint8_t rx = 0;
+  ENC28J60_Init();
+  lwip_init();
+  ip4_addr_t ip, netmask, gw;
+  IP4_ADDR(&ip,      192, 168, 1, 100);
+  IP4_ADDR(&netmask, 255, 255, 255, 0);
+  IP4_ADDR(&gw,      192, 168, 1,   1);
+
+  // netif ekle
+  netif_add(&enc_netif, &ip, &netmask, &gw,
+            NULL, enc28j60_netif_init, ethernet_input);
+  netif_set_default(&enc_netif);
+  netif_set_up(&enc_netif);
+  // HTTP server başlat
+  struct tcp_pcb *pcb = tcp_new();
+  tcp_bind(pcb, IP_ADDR_ANY, 80);
+  struct tcp_pcb *listen_pcb = tcp_listen(pcb);
+  if (listen_pcb == NULL)
+  {
+      // RAM yetmedi
+      while(1);
+  }
+  tcp_accept(listen_pcb, http_accept);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -633,33 +711,24 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+	    uint16_t len = ENC28J60_PacketReceive(pkt_buf, sizeof(pkt_buf));
+	    if (len > 0)
+	    {
+	        struct pbuf *p = pbuf_alloc(PBUF_RAW, len, PBUF_POOL);
+	        if (p != NULL)
+	        {
+	            pbuf_take(p, pkt_buf, len);
+	            if (enc_netif.input(p, &enc_netif) != ERR_OK)
+	                pbuf_free(p);
+	        }
+	    }
+	    sys_check_timeouts();
 
-
-	  uint16_t len = ENC28J60_PacketReceive(pkt_buf, sizeof(pkt_buf));
-	  if (len > 0)
-	  {
-	      uint16_t ethertype = (pkt_buf[12] << 8) | pkt_buf[13];
-	      if (ethertype == 0x0806)
-	      {
-	          ENC28J60_HandleARP(pkt_buf);
-	      }
-	      else if (ethertype == 0x0800)
-	      {
-	          if (pkt_buf[23] == 0x01) // ICMP
-	          {
-	              ENC28J60_HandleICMP(pkt_buf, len);
-	          }else if(pkt_buf[23] == 0x06){
-	        	  ENC28J60_HandleTCP(pkt_buf, len);
-	          }
-	      }
-	  }
-
-	  if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == GPIO_PIN_SET)
-	  {
-	      button_count++;
-	      HAL_Delay(200); // debounce
-	  }
-
+	    if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == GPIO_PIN_SET)
+	    {
+	        button_count++;
+	        HAL_Delay(200);
+	    }
   }
   /* USER CODE END 3 */
 }
