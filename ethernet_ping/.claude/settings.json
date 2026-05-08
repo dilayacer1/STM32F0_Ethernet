@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\DilayACER\\\\git\\\\STM32F0_Ethernet\\\\ethernet_ping\\\\ENC28J60\\\\\" -Recurse | Select-Object FullName, Length | Format-Table -AutoSize)"
+    ]
+  }
+}
